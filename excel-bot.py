@@ -11,24 +11,40 @@ import os
 from datetime import datetime
 import schedule
 import time
+import logging
 
 AWS_REGION = os.getenv("AWS_REGION", "sa-east-1")
 EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE", "mailer@pedrovs.dev")
 EMAIL_DESTINATARIO = os.getenv("EMAIL_DESTINATARIO", "pedrovs3@hotmail.com")
 
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+
 def obter_lista_acoes_b3():
     try:
+        logger.info("Buscando lista de ações da B3...")
         acoes = investpy.get_stocks(country="brazil")
+        logger.info(f"Lista de ações obtida com sucesso. Total: {len(acoes)}")
         return acoes["symbol"].tolist()
     except Exception as e:
-        print(f"Erro ao buscar lista de ações: {e}")
+        logger.error(f"Erro ao buscar lista de ações: {e}")
         return []
 
 
 def analisar_acoes():
+    logger.info("Iniciando análise de ações...")
     tickers = obter_lista_acoes_b3()
-    print(f"Analisando {len(tickers)} ações da B3...")
+    logger.info(f"Analisando {len(tickers)} ações da B3...")
     melhores_acoes = []
 
     for ticker in tickers:
@@ -51,11 +67,14 @@ def analisar_acoes():
                     "Beta": round(beta, 2),
                     "Retorno Anual (R$)": round(retorno_anual, 2),
                 })
+                logger.debug(f"Ação analisada: {ticker}")
         except Exception as e:
-            print(f"Erro ao processar {ticker}: {e}")
+            logger.warning(f"Erro ao processar {ticker}: {e}")
 
     melhores_acoes = sorted(melhores_acoes, key=lambda x: (-x["Retorno Anual (R$)"], x["Beta"]))
+    logger.info(f"Análise concluída. Total de ações recomendadas: {len(melhores_acoes)}")
     return pd.DataFrame(melhores_acoes)
+
 
 
 def salvar_em_excel(df, filename="relatorio_acoes.xlsx"):
@@ -68,6 +87,7 @@ def salvar_em_excel(df, filename="relatorio_acoes.xlsx"):
 
 def enviar_email_ses(relatorio_path):
     try:
+        logger.info(f"Iniciando envio do email com o relatório: {relatorio_path}")
         ses_client = boto3.client("ses", region_name=AWS_REGION)
 
         subject = "📊 Relatório de Ações Promissoras"
@@ -99,9 +119,9 @@ Seu Bot de Finanças"""
             Destinations=[EMAIL_DESTINATARIO],
             RawMessage={"Data": msg.as_string()},
         )
-        print("Email enviado com sucesso via SES!")
+        logger.info("Email enviado com sucesso via SES!")
     except Exception as e:
-        print(f"Erro ao enviar email: {e}")
+        logger.error(f"Erro ao enviar email: {e}")
 
 
 def enviar_relatorio():
@@ -114,9 +134,9 @@ def enviar_relatorio():
         print("Nenhuma ação atendeu aos critérios.")
 
 
-schedule.every().day.at("23:16").do(enviar_relatorio)
+schedule.every().day.at("09:00").do(enviar_relatorio)
 
-print("Bot de análise de ações dinâmicas iniciado. Aguardando horários agendados...")
+logging.info("Bot de análise de ações dinâmicas iniciado. Aguardando horários agendados...")
 while True:
     schedule.run_pending()
     time.sleep(1)
