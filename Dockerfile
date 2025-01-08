@@ -10,8 +10,5 @@ COPY . .
 # Instale as dependências do projeto
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Exponha a porta necessária (se necessário, aqui não há uso direto de portas)
-EXPOSE 80
-
 # Comando para iniciar o bot
 CMD ["python", "excel-bot.py"]
