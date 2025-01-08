@@ -114,7 +114,7 @@ def enviar_relatorio():
         print("Nenhuma ação atendeu aos critérios.")
 
 
-schedule.every().day.at("22:50").do(enviar_relatorio)
+schedule.every().day.at("23:00").do(enviar_relatorio)
 
 print("Bot de análise de ações dinâmicas iniciado. Aguardando horários agendados...")
 while True:
