@@ -221,9 +221,9 @@ def enviar_relatorio():
         print("Nenhuma ação atendeu aos critérios.")
 
 
-schedule.every().day.at("11:00").do(enviar_relatorio)  # Agendar às 09:00 UTF
-schedule.every().day.at("14:00").do(enviar_relatorio)  # Agendar às 12:00 UTF
-schedule.every().day.at("20:00").do(enviar_relatorio)  # Agendar às 18:00 UTF
+schedule.every().day.at("12:00").do(enviar_relatorio)  # Agendar às 09:00 UTF
+schedule.every().day.at("15:00").do(enviar_relatorio)  # Agendar às 12:00 UTF
+schedule.every().day.at("20:00").do(enviar_relatorio)  # Agendar às 17:00 UTF
 
 
 def executar_agendamentos():
