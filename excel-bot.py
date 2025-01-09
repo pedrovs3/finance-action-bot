@@ -52,8 +52,13 @@ def obter_lista_acoes_b3():
     try:
         logger.info("Buscando lista de ações da B3...")
         acoes = investpy.get_stocks(country="brazil")
-        logger.info(f"Lista de ações obtida com sucesso. Total: {len(acoes)}")
-        return acoes["symbol"].tolist()
+        acoes_us = investpy.get_stocks(country="united states")
+        logger.info(f"Lista de ações obtida com sucesso. Total: {len(acoes + acoes_us)}")
+        
+        simbolos_br = (acoes["symbol"] + ".SA").tolist()
+        simbolos_us = acoes_us["symbol"].tolist()
+
+        return simbolos_br + simbolos_us
     except Exception as e:
         logger.error(f"Erro ao buscar lista de ações: {e}")
         return []
@@ -66,7 +71,10 @@ def analisar_acoes_com_chance():
 
     def processar_acao(ticker):
         try:
-            acao = yf.Ticker(f"{ticker}.SA")
+            percentage_done = (tickers.index(ticker) + 1) / len(tickers) * 100
+            logger.info(f"Progresso: {tickers.index(ticker) + 1}/{len(tickers)} - {percentage_done:.2f}%", extra={"ticker": ticker})
+            logger.info(f"Processando ação: {ticker}")
+            acao = yf.Ticker(ticker)
             info = acao.info
 
             dividend_yield = info.get("dividendYield", 0) * 100
@@ -139,9 +147,8 @@ def salvar_em_excel(df, filename="relatorio_acoes.xlsx"):
     if not df.empty:
         df.to_excel(filename, index=False, engine="openpyxl")
         ajustar_largura_colunas(filename)
-        print(f"Arquivo Excel salvo e colunas ajustadas: {filename}")
     else:
-        print("Nenhum dado para salvar no Excel.")
+        logger.error("Nenhum dado para salvar no Excel.")
 
 
 def ajustar_largura_colunas(filename):
