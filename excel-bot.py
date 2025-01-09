@@ -2,7 +2,9 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from concurrent.futures import ThreadPoolExecutor
 
+import threading
 import investpy
 import yfinance as yf
 import pandas as pd
@@ -12,11 +14,18 @@ from datetime import datetime
 import schedule
 import time
 import logging
+from openpyxl import load_workbook
+from dotenv import load_dotenv
+
+load_dotenv()
 
 AWS_REGION = os.getenv("AWS_REGION", "sa-east-1")
 EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE", "mailer@pedrovs.dev")
-EMAIL_DESTINATARIO = os.getenv("EMAIL_DESTINATARIO", "pedrovs3@hotmail.com")
 
+EMAIL_DESTINATARIOS = os.getenv("EMAIL_DESTINATARIOS", "").split(",")
+
+if not EMAIL_DESTINATARIOS or EMAIL_DESTINATARIOS == [""]:
+    raise ValueError("Nenhum destinatário configurado no ENV (EMAIL_DESTINATARIOS)")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +37,15 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+RECOMMENDATION_DICT = dict(
+    buy="Compra",
+    strong_buy="Forte compra",
+    hold="Mantenha",
+    underperform="Desempenho inferior",
+    strong_sell="Forte venda",
+    sell="Venda"
+)
 
 
 def obter_lista_acoes_b3():
@@ -41,48 +59,116 @@ def obter_lista_acoes_b3():
         return []
 
 
-def analisar_acoes():
-    logger.info("Iniciando análise de ações...")
+def analisar_acoes_com_chance():
+    logger.info("Iniciando análise de ações com chance de sucesso...")
     tickers = obter_lista_acoes_b3()
     logger.info(f"Analisando {len(tickers)} ações da B3...")
-    melhores_acoes = []
 
-    for ticker in tickers:
+    def processar_acao(ticker):
         try:
             acao = yf.Ticker(f"{ticker}.SA")
             info = acao.info
 
             dividend_yield = info.get("dividendYield", 0) * 100
             beta = info.get("beta", 1)
-            crescimento = info.get("revenueGrowth", 0)
+            crescimento_receita = info.get("revenueGrowth", 0) * 100
+            crescimento_lucro = info.get("earningsGrowth", 0) * 100
             preco_atual = info.get("currentPrice", None)
+            trailing_eps = info.get("trailingEps", None)
+            recomendacao_compra = info.get("recommendationKey", "none")
 
-            if dividend_yield > 5 and beta < 1.5 and crescimento > 0 and preco_atual:
+            pe_ratio = preco_atual / trailing_eps if preco_atual and trailing_eps else None
+
+            pb_ratio = info.get("priceToBook", None)
+            short_percent = info.get("shortPercentOfFloat", 0) * 100
+            high_52_week = info.get("fiftyTwoWeekHigh", None)
+            low_52_week = info.get("fiftyTwoWeekLow", None)
+
+            recomendacao_traduzida = RECOMMENDATION_DICT.get(recomendacao_compra, "N/A")
+
+            if dividend_yield > 2 > beta and preco_atual and pe_ratio and 5 <= pe_ratio <= 50:
                 retorno_anual = (dividend_yield / 100) * preco_atual
-                melhores_acoes.append({
+
+                chance_sucesso = 0
+                chance_sucesso += min(dividend_yield, 30) * 0.3  # Peso 30%
+                chance_sucesso += max(0, min(crescimento_receita, 20)) * 0.25  # Peso 25%
+                chance_sucesso += max(0, min(crescimento_lucro, 20)) * 0.25  # Peso 25%
+                chance_sucesso -= beta * 10  # Impacto negativo do Beta (Peso -10%)
+
+                if recomendacao_traduzida == "Forte compra":
+                    chance_sucesso += 20
+                elif recomendacao_traduzida == "Compra":
+                    chance_sucesso += 10
+
+                chance_sucesso = min(max(chance_sucesso, 0), 100)  # Garantir entre 0 e 100%
+
+                return {
                     "Ticker": ticker,
                     "Preço Atual (R$)": round(preco_atual, 2),
                     "Dividend Yield (%)": round(dividend_yield, 2),
-                    "Crescimento (%)": round(crescimento * 100, 2),
+                    "Crescimento Receita (%)": round(crescimento_receita, 2),
+                    "Crescimento Lucro (%)": round(crescimento_lucro, 2),
                     "Beta": round(beta, 2),
                     "Retorno Anual (R$)": round(retorno_anual, 2),
-                })
-                logger.debug(f"Ação analisada: {ticker}")
+                    "P/E Ratio": round(pe_ratio, 2) if pe_ratio else "N/A",
+                    "P/B Ratio": round(pb_ratio, 2) if pb_ratio else "N/A",
+                    "Short Percent (%)": round(short_percent, 2),
+                    "52-Week High (R$)": round(high_52_week, 2) if high_52_week else "N/A",
+                    "52-Week Low (R$)": round(low_52_week, 2) if low_52_week else "N/A",
+                    "Recomendação": recomendacao_traduzida,
+                    "Chance de Sucesso (%)": round(chance_sucesso, 2)
+                }
         except Exception as e:
             logger.warning(f"Erro ao processar {ticker}: {e}")
+        return None
 
-    melhores_acoes = sorted(melhores_acoes, key=lambda x: (-x["Retorno Anual (R$)"], x["Beta"]))
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        resultados = list(executor.map(processar_acao, tickers))
+
+    melhores_acoes = [acao for acao in resultados if acao]
+    melhores_acoes = sorted(
+        melhores_acoes,
+        key=lambda x: -x["Chance de Sucesso (%)"]
+    )
+
     logger.info(f"Análise concluída. Total de ações recomendadas: {len(melhores_acoes)}")
     return pd.DataFrame(melhores_acoes)
-
 
 
 def salvar_em_excel(df, filename="relatorio_acoes.xlsx"):
     if not df.empty:
         df.to_excel(filename, index=False, engine="openpyxl")
-        print(f"Arquivo Excel salvo: {filename}")
+        ajustar_largura_colunas(filename)
+        print(f"Arquivo Excel salvo e colunas ajustadas: {filename}")
     else:
         print("Nenhum dado para salvar no Excel.")
+
+
+def ajustar_largura_colunas(filename):
+    workbook = load_workbook(filename)
+    sheet = workbook.active
+
+    colunas = {
+        "A": 15,  # Ticker
+        "B": 20,  # Preço Atual
+        "C": 18,  # Dividend Yield
+        "D": 20,  # Crescimento Receita
+        "E": 20,  # Crescimento Lucro
+        "F": 10,  # Beta
+        "G": 20,  # Retorno Anual
+        "H": 10,  # P/E Ratio
+        "I": 10,  # P/B Ratio
+        "J": 20,  # Short Percent
+        "K": 20,  # 52-Week High
+        "L": 20,  # 52-Week Low
+        "M": 25,  # Recomendação
+        "N": 25,  # Chance de Sucesso
+    }
+
+    for coluna, largura in colunas.items():
+        sheet.column_dimensions[coluna].width = largura
+
+    workbook.save(filename)
 
 
 def enviar_email_ses(relatorio_path):
@@ -94,13 +180,14 @@ def enviar_email_ses(relatorio_path):
         body_text = f"""Olá,
 
 Segue em anexo o relatório de ações promissoras gerado em {datetime.now().strftime('%d/%m/%Y')}.
+
 Atenciosamente,
 Seu Bot de Finanças"""
 
         msg = MIMEMultipart()
         msg["Subject"] = subject
         msg["From"] = EMAIL_REMETENTE
-        msg["To"] = EMAIL_DESTINATARIO
+        msg["To"] = ", ".join(EMAIL_DESTINATARIOS)
 
         msg.attach(MIMEText(body_text, "plain"))
 
@@ -116,27 +203,41 @@ Seu Bot de Finanças"""
 
         response = ses_client.send_raw_email(
             Source=EMAIL_REMETENTE,
-            Destinations=[EMAIL_DESTINATARIO],
+            Destinations=EMAIL_DESTINATARIOS,
             RawMessage={"Data": msg.as_string()},
         )
-        logger.info("Email enviado com sucesso via SES!")
+        logger.info("Email enviado com sucesso para: " + ", ".join(EMAIL_DESTINATARIOS))
     except Exception as e:
         logger.error(f"Erro ao enviar email: {e}")
 
 
 def enviar_relatorio():
-    df = analisar_acoes()
+    df = analisar_acoes_com_chance()
     if not df.empty:
-        excel_filename = "relatorio_acoes.xlsx"
+        excel_filename = "relatorio_acoes_chance.xlsx"
         salvar_em_excel(df, excel_filename)
         enviar_email_ses(excel_filename)
     else:
         print("Nenhuma ação atendeu aos critérios.")
 
 
-schedule.every().day.at("12:00").do(enviar_relatorio)
+schedule.every().day.at("11:00").do(enviar_relatorio)  # Agendar às 09:00 UTF
+schedule.every().day.at("14:00").do(enviar_relatorio)  # Agendar às 12:00 UTF
+schedule.every().day.at("20:00").do(enviar_relatorio)  # Agendar às 18:00 UTF
 
-logging.info("Bot de análise de ações dinâmicas iniciado. Aguardando horários agendados...")
-while True:
-    schedule.run_pending()
-    time.sleep(1)
+
+def executar_agendamentos():
+    logger.info("Iniciando o agendador de tarefas...")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+
+thread_agendamento = threading.Thread(target=executar_agendamentos, daemon=True)
+thread_agendamento.start()
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    logger.info("Encerrando o agendador.")
