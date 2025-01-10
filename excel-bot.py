@@ -17,11 +17,14 @@ import logging
 from openpyxl import load_workbook
 from dotenv import load_dotenv
 
+from colorama import Fore, Style
+import time
+from requests.exceptions import HTTPError
+
 load_dotenv()
 
 AWS_REGION = os.getenv("AWS_REGION", "sa-east-1")
 EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE", "mailer@pedrovs.dev")
-
 EMAIL_DESTINATARIOS = os.getenv("EMAIL_DESTINATARIOS", "").split(",")
 
 if not EMAIL_DESTINATARIOS or EMAIL_DESTINATARIOS == [""]:
@@ -48,99 +51,124 @@ RECOMMENDATION_DICT = dict(
 )
 
 
-def obter_lista_acoes_b3():
+def obter_lista_acoes():
     try:
-        logger.info("Buscando lista de ações da B3...")
-        acoes = investpy.get_stocks(country="brazil")
+        logger.info("Buscando lista de ações...")
+        acoes_br = investpy.get_stocks(country="brazil")
         acoes_us = investpy.get_stocks(country="united states")
-        logger.info(f"Lista de ações obtida com sucesso. Total: {len(acoes + acoes_us)}")
-        
-        simbolos_br = (acoes["symbol"] + ".SA").tolist()
+        logger.info(f"Lista de ações obtida com sucesso. Total: {len(acoes_br) + len(acoes_us)}")
+
+        simbolos_br = (acoes_br["symbol"] + ".SA").tolist()
         simbolos_us = acoes_us["symbol"].tolist()
 
-        return simbolos_br + simbolos_us
+        return simbolos_br, simbolos_us
     except Exception as e:
         logger.error(f"Erro ao buscar lista de ações: {e}")
-        return []
+        return [], []
 
 
-def analisar_acoes_com_chance():
-    logger.info("Iniciando análise de ações com chance de sucesso...")
-    tickers = obter_lista_acoes_b3()
-    logger.info(f"Analisando {len(tickers)} ações da B3...")
+def processar_acao(ticker, mercado, progresso, total):
+    try:
+        acao = yf.Ticker(ticker)
 
-    def processar_acao(ticker):
-        try:
-            percentage_done = (tickers.index(ticker) + 1) / len(tickers) * 100
-            logger.info(f"Progresso: {tickers.index(ticker) + 1}/{len(tickers)} - {percentage_done:.2f}%", extra={"ticker": ticker})
-            logger.info(f"Processando ação: {ticker}")
-            acao = yf.Ticker(ticker)
-            info = acao.info
+        if not acao.info or "symbol" not in acao.info:
+            logger.warning(f"Ticker inválido ou não encontrado: {ticker}")
+            return None
 
-            dividend_yield = info.get("dividendYield", 0) * 100
-            beta = info.get("beta", 1)
-            crescimento_receita = info.get("revenueGrowth", 0) * 100
-            crescimento_lucro = info.get("earningsGrowth", 0) * 100
-            preco_atual = info.get("currentPrice", None)
-            trailing_eps = info.get("trailingEps", None)
-            recomendacao_compra = info.get("recommendationKey", "none")
+        info = acao.info
 
-            pe_ratio = preco_atual / trailing_eps if preco_atual and trailing_eps else None
+        dividend_yield = info.get("dividendYield", 0) * 100
+        beta = info.get("beta", 1)
+        crescimento_receita = info.get("revenueGrowth", 0) * 100
+        crescimento_lucro = info.get("earningsGrowth", 0) * 100
+        preco_atual = info.get("currentPrice", None)
+        trailing_eps = info.get("trailingEps", None)
+        recomendacao_compra = info.get("recommendationKey", "none")
 
-            pb_ratio = info.get("priceToBook", None)
-            short_percent = info.get("shortPercentOfFloat", 0) * 100
-            high_52_week = info.get("fiftyTwoWeekHigh", None)
-            low_52_week = info.get("fiftyTwoWeekLow", None)
+        pe_ratio = preco_atual / trailing_eps if preco_atual and trailing_eps else None
 
-            recomendacao_traduzida = RECOMMENDATION_DICT.get(recomendacao_compra, "N/A")
+        if mercado == "US":
+            if not preco_atual:
+                preco_atual = info.get("regularMarketPrice", None)
 
-            if dividend_yield > 2 > beta and preco_atual and pe_ratio and 5 <= pe_ratio <= 50:
-                retorno_anual = (dividend_yield / 100) * preco_atual
+        recomendacao_traduzida = RECOMMENDATION_DICT.get(recomendacao_compra, "N/A")
 
-                chance_sucesso = 0
-                chance_sucesso += min(dividend_yield, 30) * 0.3  # Peso 30%
-                chance_sucesso += max(0, min(crescimento_receita, 20)) * 0.25  # Peso 25%
-                chance_sucesso += max(0, min(crescimento_lucro, 20)) * 0.25  # Peso 25%
-                chance_sucesso -= beta * 10  # Impacto negativo do Beta (Peso -10%)
+        if dividend_yield > 1 and preco_atual and pe_ratio and 5 <= pe_ratio <= 60:
+            retorno_anual = (dividend_yield / 100) * preco_atual
 
-                if recomendacao_traduzida == "Forte compra":
-                    chance_sucesso += 20
-                elif recomendacao_traduzida == "Compra":
-                    chance_sucesso += 10
+            chance_sucesso = 0
+            chance_sucesso += min(dividend_yield, 30) * 0.3
+            chance_sucesso += max(0, min(crescimento_receita, 20)) * 0.25
+            chance_sucesso += max(0, min(crescimento_lucro, 20)) * 0.25
+            chance_sucesso -= beta * 10
 
-                chance_sucesso = min(max(chance_sucesso, 0), 100)  # Garantir entre 0 e 100%
+            if recomendacao_traduzida == "Forte compra":
+                chance_sucesso += 20
+            elif recomendacao_traduzida == "Compra":
+                chance_sucesso += 10
 
-                return {
-                    "Ticker": ticker,
-                    "Preço Atual (R$)": round(preco_atual, 2),
-                    "Dividend Yield (%)": round(dividend_yield, 2),
-                    "Crescimento Receita (%)": round(crescimento_receita, 2),
-                    "Crescimento Lucro (%)": round(crescimento_lucro, 2),
-                    "Beta": round(beta, 2),
-                    "Retorno Anual (R$)": round(retorno_anual, 2),
-                    "P/E Ratio": round(pe_ratio, 2) if pe_ratio else "N/A",
-                    "P/B Ratio": round(pb_ratio, 2) if pb_ratio else "N/A",
-                    "Short Percent (%)": round(short_percent, 2),
-                    "52-Week High (R$)": round(high_52_week, 2) if high_52_week else "N/A",
-                    "52-Week Low (R$)": round(low_52_week, 2) if low_52_week else "N/A",
-                    "Recomendação": recomendacao_traduzida,
-                    "Chance de Sucesso (%)": round(chance_sucesso, 2)
-                }
-        except Exception as e:
-            logger.warning(f"Erro ao processar {ticker}: {e}")
-        return None
+            chance_sucesso = min(max(chance_sucesso, 0), 100)
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        resultados = list(executor.map(processar_acao, tickers))
+            percentual = (progresso + 1) / total * 100
+            print(
+                f"{Fore.GREEN}[Progresso: {progresso + 1}/{total} - {percentual:.2f}%]{Style.RESET_ALL} "
+                f"Analisando {ticker} ({mercado})"
+            )
 
-    melhores_acoes = [acao for acao in resultados if acao]
-    melhores_acoes = sorted(
-        melhores_acoes,
-        key=lambda x: -x["Chance de Sucesso (%)"]
-    )
+            return {
+                "Ticker": ticker,
+                "Mercado": mercado,
+                "Preço Atual (R$ ou US$)": round(preco_atual, 2),
+                "Dividend Yield (%)": round(dividend_yield, 2),
+                "Crescimento Receita (%)": round(crescimento_receita, 2),
+                "Crescimento Lucro (%)": round(crescimento_lucro, 2),
+                "Beta": round(beta, 2),
+                "Retorno Anual (R$ ou US$)": round(retorno_anual, 2),
+                "P/E Ratio": round(pe_ratio, 2) if pe_ratio else "N/A",
+                "Recomendação": recomendacao_traduzida,
+                "Chance de Sucesso (%)": round(chance_sucesso, 2)
+            }
 
-    logger.info(f"Análise concluída. Total de ações recomendadas: {len(melhores_acoes)}")
-    return pd.DataFrame(melhores_acoes)
+    except HTTPError as http_err:
+        if http_err.response.status_code == 429:
+            logger.error(f"Erro 429 (Too Many Requests) para {ticker}. Retentando após atraso.")
+            time.sleep(5)  # Atraso antes de tentar novamente
+            return processar_acao(ticker, mercado, progresso, total)
+        else:
+            logger.error(f"Erro HTTP ao processar {ticker}: {http_err}")
+    except Exception as e:
+        logger.warning(f"Erro ao processar {ticker}: {e}")
+    return None
+
+
+def analisar_acoes():
+    logger.info("Iniciando análise de ações...")
+    tickers_br, tickers_us = obter_lista_acoes()
+    total = len(tickers_br) + len(tickers_us)
+
+    def limitar_taxa(ticker, mercado, progresso):
+        time.sleep(0.2)  # Atraso de 200ms para cada chamada
+        return processar_acao(ticker, mercado, progresso, total)
+
+    resultados = []
+    progresso = 0
+
+    for ticker in tickers_br:
+        resultado = limitar_taxa(ticker, "BR", progresso)
+        if resultado:
+            resultados.append(resultado)
+        progresso += 1
+
+    for ticker in tickers_us:
+        resultado = limitar_taxa(ticker, "US", progresso)
+        if resultado:
+            resultados.append(resultado)
+        progresso += 1
+
+    todas_acoes = sorted(resultados, key=lambda x: -x["Chance de Sucesso (%)"])
+
+    logger.info(f"Análise concluída. Total de ações recomendadas: {len(todas_acoes)}")
+    return pd.DataFrame(todas_acoes)
 
 
 def salvar_em_excel(df, filename="relatorio_acoes.xlsx"):
@@ -157,19 +185,16 @@ def ajustar_largura_colunas(filename):
 
     colunas = {
         "A": 15,  # Ticker
-        "B": 20,  # Preço Atual
-        "C": 18,  # Dividend Yield
-        "D": 20,  # Crescimento Receita
-        "E": 20,  # Crescimento Lucro
-        "F": 10,  # Beta
-        "G": 20,  # Retorno Anual
-        "H": 10,  # P/E Ratio
-        "I": 10,  # P/B Ratio
-        "J": 20,  # Short Percent
-        "K": 20,  # 52-Week High
-        "L": 20,  # 52-Week Low
-        "M": 25,  # Recomendação
-        "N": 25,  # Chance de Sucesso
+        "B": 10,  # Mercado
+        "C": 20,  # Preço Atual
+        "D": 18,  # Dividend Yield
+        "E": 20,  # Crescimento Receita
+        "F": 20,  # Crescimento Lucro
+        "G": 10,  # Beta
+        "H": 20,  # Retorno Anual
+        "I": 10,  # P/E Ratio
+        "J": 25,  # Recomendação
+        "K": 25,  # Chance de Sucesso
     }
 
     for coluna, largura in colunas.items():
@@ -186,7 +211,7 @@ def enviar_email_ses(relatorio_path):
         subject = "📊 Relatório de Ações Promissoras"
         body_text = f"""Olá,
 
-Segue em anexo o relatório de ações promissoras gerado em {datetime.now().strftime('%d/%m/%Y')}.
+Segue em anexo o relatório de ações promissoras gerado em {datetime.now().strftime('%d/%m/%Y')}. 
 
 Atenciosamente,
 Seu Bot de Finanças"""
@@ -208,7 +233,7 @@ Seu Bot de Finanças"""
             )
             msg.attach(part)
 
-        response = ses_client.send_raw_email(
+        ses_client.send_raw_email(
             Source=EMAIL_REMETENTE,
             Destinations=EMAIL_DESTINATARIOS,
             RawMessage={"Data": msg.as_string()},
@@ -219,29 +244,25 @@ Seu Bot de Finanças"""
 
 
 def enviar_relatorio():
-    df = analisar_acoes_com_chance()
+    df = analisar_acoes()
     if not df.empty:
-        excel_filename = "relatorio_acoes_chance.xlsx"
-        salvar_em_excel(df, excel_filename)
-        enviar_email_ses(excel_filename)
+        filename = "relatorio_acoes.xlsx"
+        salvar_em_excel(df, filename)
+        enviar_email_ses(filename)
     else:
-        print("Nenhuma ação atendeu aos critérios.")
+        logger.info("Nenhuma ação atendeu aos critérios.")
 
-
-schedule.every().day.at("12:00").do(enviar_relatorio)  # Agendar às 09:00 UTF
-schedule.every().day.at("15:00").do(enviar_relatorio)  # Agendar às 12:00 UTF
-schedule.every().day.at("20:00").do(enviar_relatorio)  # Agendar às 17:00 UTF
+schedule.every().day.at("12:00").do(enviar_relatorio)
+schedule.every().day.at("20:00").do(enviar_relatorio)
 
 
 def executar_agendamentos():
-    logger.info("Iniciando o agendador de tarefas...")
     while True:
         schedule.run_pending()
         time.sleep(1)
 
 
-thread_agendamento = threading.Thread(target=executar_agendamentos, daemon=True)
-thread_agendamento.start()
+threading.Thread(target=executar_agendamentos, daemon=True).start()
 
 try:
     while True:
