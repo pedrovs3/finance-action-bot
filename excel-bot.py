@@ -252,20 +252,26 @@ def enviar_relatorio():
     else:
         logger.info("Nenhuma ação atendeu aos critérios.")
 
+
 schedule.every().day.at("12:00").do(enviar_relatorio)
 schedule.every().day.at("20:00").do(enviar_relatorio)
 
 
 def executar_agendamentos():
+    logger.info("Agendador iniciado. Aguardando tarefas agendadas...")
     while True:
         schedule.run_pending()
         time.sleep(1)
 
 
-threading.Thread(target=executar_agendamentos, daemon=True).start()
+if __name__ == "__main__":
+    logger.info("Script iniciado. Configurando agendamentos...")
 
-try:
-    while True:
-        time.sleep(1)
-except KeyboardInterrupt:
-    logger.info("Encerrando o agendador.")
+    threading.Thread(target=executar_agendamentos, daemon=True).start()
+
+    try:
+        logger.info("Executando o loop principal do programa. Pressione Ctrl+C para sair.")
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Encerrando o script.")
