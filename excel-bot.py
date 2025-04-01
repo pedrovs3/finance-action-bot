@@ -253,8 +253,8 @@ def enviar_relatorio():
         logger.info("Nenhuma ação atendeu aos critérios.")
 
 
-schedule.every().day.at("12:00").do(enviar_relatorio)
-schedule.every().day.at("20:00").do(enviar_relatorio)
+schedule.every().monday.at("12:00").do(enviar_relatorio)
+schedule.every().friday.at("20:00").do(enviar_relatorio)
 
 
 def executar_agendamentos():
