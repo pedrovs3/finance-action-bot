@@ -55,13 +55,11 @@ def obter_lista_acoes():
     try:
         logger.info("Buscando lista de ações...")
         acoes_br = investpy.get_stocks(country="brazil")
-        acoes_us = investpy.get_stocks(country="united states")
-        logger.info(f"Lista de ações obtida com sucesso. Total: {len(acoes_br) + len(acoes_us)}")
+        logger.info(f"Lista de ações obtida com sucesso. Total: {len(acoes_br)}")
 
         simbolos_br = (acoes_br["symbol"] + ".SA").tolist()
-        simbolos_us = acoes_us["symbol"].tolist()
 
-        return simbolos_br, simbolos_us
+        return simbolos_br
     except Exception as e:
         logger.error(f"Erro ao buscar lista de ações: {e}")
         return [], []
@@ -86,10 +84,6 @@ def processar_acao(ticker, mercado, progresso, total):
         recomendacao_compra = info.get("recommendationKey", "none")
 
         pe_ratio = preco_atual / trailing_eps if preco_atual and trailing_eps else None
-
-        if mercado == "US":
-            if not preco_atual:
-                preco_atual = info.get("regularMarketPrice", None)
 
         recomendacao_traduzida = RECOMMENDATION_DICT.get(recomendacao_compra, "N/A")
 
@@ -143,8 +137,8 @@ def processar_acao(ticker, mercado, progresso, total):
 
 def analisar_acoes():
     logger.info("Iniciando análise de ações...")
-    tickers_br, tickers_us = obter_lista_acoes()
-    total = len(tickers_br) + len(tickers_us)
+    tickers_br = obter_lista_acoes()
+    total = len(tickers_br)
 
     def limitar_taxa(ticker, mercado, progresso):
         time.sleep(0.2)  # Atraso de 200ms para cada chamada
@@ -155,12 +149,6 @@ def analisar_acoes():
 
     for ticker in tickers_br:
         resultado = limitar_taxa(ticker, "BR", progresso)
-        if resultado:
-            resultados.append(resultado)
-        progresso += 1
-
-    for ticker in tickers_us:
-        resultado = limitar_taxa(ticker, "US", progresso)
         if resultado:
             resultados.append(resultado)
         progresso += 1
@@ -260,6 +248,7 @@ schedule.every().friday.at("20:00").do(enviar_relatorio)
 def executar_agendamentos():
     logger.info("Agendador iniciado. Aguardando tarefas agendadas...")
     while True:
+        enviar_relatorio()
         schedule.run_pending()
         time.sleep(1)
 
