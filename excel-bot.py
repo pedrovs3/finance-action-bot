@@ -248,7 +248,6 @@ schedule.every().friday.at("20:00").do(enviar_relatorio)
 def executar_agendamentos():
     logger.info("Agendador iniciado. Aguardando tarefas agendadas...")
     while True:
-        enviar_relatorio()
         schedule.run_pending()
         time.sleep(1)
 
