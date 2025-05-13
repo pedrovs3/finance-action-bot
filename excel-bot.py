@@ -120,19 +120,19 @@ def processar_acao(ticker, mercado, progresso, total, tipo_ativo="acao"):
             print(f"[{progresso + 1}/{total} - {percentual:.2f}%] Analisando FII {ticker}")
 
             return {
+                "Tipo de Ativo": tipo,
                 "Ticker": ticker,
                 "Mercado": mercado,
-                "Tipo de Ativo": tipo,
                 "Setor": setor,
                 "Preço Atual (R$ ou US$)": round(preco_atual, 2),
                 "Dividend Yield (%)": round(dividend_yield, 2),
                 "Retorno Anual (R$ ou US$)": round(retorno_anual, 2),
-                "Chance de Sucesso (%)": round(chance_sucesso, 2),
                 "P/E Ratio": "N/A",
                 "Crescimento Receita (%)": "N/A",
                 "Crescimento Lucro (%)": "N/A",
                 "Beta": "N/A",
-                "Recomendação": "N/A"
+                "Recomendação": "N/A",
+                "Chance de Sucesso (%)": round(chance_sucesso, 2),
             }
 
         crescimento_receita = info.get("revenueGrowth", 0) * 100
