@@ -8,7 +8,7 @@ import threading
 import investpy
 import yfinance as yf
 import pandas as pd
-import boto3
+import smtplib
 import os
 import json
 import requests
@@ -24,7 +24,7 @@ from requests.exceptions import HTTPError
 # ==== Configuração Inicial ====
 load_dotenv()
 
-AWS_REGION = os.getenv("AWS_REGION", "sa-east-1")
+GMAIL_PASSWORD = os.getenv("GMAIL_PASSWORD", "")
 EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE", "mailer@pedrovs.dev")
 EMAIL_DESTINATARIOS = os.getenv("EMAIL_DESTINATARIOS", "").split(",")
 
@@ -298,10 +298,12 @@ def salvar_em_excel(df_acoes, df_fiis, filename="relatorio_investimentos.xlsx"):
     logger.info(f"Relatório salvo com sucesso em '{filename}'.")
 
 
-def enviar_email_ses(relatorio_path):
-    """Envia o relatório por e-mail usando o AWS SES."""
+def enviar_email_gmail(relatorio_path):
+    """Envia o relatório por e-mail usando o Gmail SMTP."""
     try:
-        ses_client = boto3.client("ses", region_name=AWS_REGION)
+        if not GMAIL_PASSWORD:
+            raise ValueError("GMAIL_PASSWORD não configurado no ENV")
+        
         msg = MIMEMultipart()
         msg["Subject"] = f"📊 Relatório de Ações e FIIs - {datetime.now().strftime('%d/%m/%Y')}"
         msg["From"] = EMAIL_REMETENTE
@@ -315,14 +317,15 @@ def enviar_email_ses(relatorio_path):
             part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(relatorio_path)}")
             msg.attach(part)
 
-        ses_client.send_raw_email(
-            Source=EMAIL_REMETENTE,
-            Destinations=EMAIL_DESTINATARIOS,
-            RawMessage={"Data": msg.as_string()}
-        )
+        # Conecta ao servidor SMTP do Gmail
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(EMAIL_REMETENTE, GMAIL_PASSWORD)
+            server.sendmail(EMAIL_REMETENTE, EMAIL_DESTINATARIOS, msg.as_string())
+        
         logger.info("Email enviado com sucesso.")
     except Exception as e:
-        logger.error(f"Erro ao enviar email via SES: {e}")
+        logger.error(f"Erro ao enviar email via Gmail: {e}")
 
 
 def enviar_relatorio():
@@ -333,7 +336,7 @@ def enviar_relatorio():
     if not df_acoes.empty or not df_fiis.empty:
         filename = "relatorio_investimentos.xlsx"
         salvar_em_excel(df_acoes, df_fiis, filename)
-        enviar_email_ses(filename)
+        enviar_email_gmail(filename)
     else:
         logger.warning("Nenhum dado para gerar relatório. O e-mail não será enviado.")
 

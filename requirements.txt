@@ -1,6 +1,5 @@
 pandas~=2.2.3
 openpyxl~=3.1.5
-boto3~=1.35.94
 schedule~=1.2.2
 investpy~=1.0.8
 yfinance~=0.2.61
